@@ -11,11 +11,17 @@ async function startServer() {
   const wss = new WebSocketServer({ server });
   const PORT = 3000;
 
+  function generateRoomCode() {
+    return Math.random().toString(36).substring(2, 8).toUpperCase();
+  }
+
   let gameState: GameState = {
     isStarted: false,
     isVaultOpen: false,
     teams: [],
     startTime: null,
+    roomCode: generateRoomCode(),
+    connectedPlayers: 0,
   };
 
   function broadcast(message: ServerMessage) {
@@ -28,16 +34,24 @@ async function startServer() {
   }
 
   wss.on("connection", (ws) => {
-    // Send initial state to new client
-    ws.send(JSON.stringify({ type: "INIT", state: gameState }));
+    gameState.connectedPlayers = wss.clients.size;
+    broadcast({ type: "UPDATE", state: gameState });
 
     ws.on("message", (data) => {
       try {
         const message: ClientMessage = JSON.parse(data.toString());
 
         switch (message.type) {
+          case "JOIN_ROOM":
+            // In this simple version, we only have one room, 
+            // but we validate the code for engagement.
+            if (message.roomCode.toUpperCase() === gameState.roomCode) {
+              ws.send(JSON.stringify({ type: "UPDATE", state: gameState }));
+            }
+            break;
           case "START_GAME":
             gameState = {
+              ...gameState,
               isStarted: true,
               isVaultOpen: false,
               teams: INITIAL_TEAMS(message.teamCount),
@@ -65,6 +79,7 @@ async function startServer() {
 
           case "RESET_GAME":
             gameState = {
+              ...gameState,
               isStarted: false,
               isVaultOpen: false,
               teams: [],
@@ -76,6 +91,11 @@ async function startServer() {
       } catch (err) {
         console.error("Error processing message:", err);
       }
+    });
+
+    ws.on("close", () => {
+      gameState.connectedPlayers = wss.clients.size;
+      broadcast({ type: "UPDATE", state: gameState });
     });
   });
 

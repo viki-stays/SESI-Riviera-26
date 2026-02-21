@@ -21,10 +21,16 @@ export default function App() {
   const [selectedTeamId, setSelectedTeamId] = useState<number | null>(null);
   const [teamCount, setTeamCount] = useState(4);
   const [inputCode, setInputCode] = useState('');
-  const [error, setError] = useState<string | null>(null);
+  const [isHost, setIsHost] = useState(false);
+  const [hasJoined, setHasJoined] = useState(false);
+  const [joinCode, setJoinCode] = useState('');
+  const [joinError, setJoinError] = useState(false);
   const socketRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('role') === 'host') setIsHost(true);
+
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const socket = new WebSocket(`${protocol}//${window.location.host}`);
     socketRef.current = socket;
@@ -33,8 +39,6 @@ export default function App() {
       const message: ServerMessage = JSON.parse(event.data);
       if (message.type === 'INIT' || message.type === 'UPDATE') {
         setGameState(message.state);
-      } else if (message.type === 'VAULT_OPENED') {
-        // Vault opened animation handled by state update
       }
     };
 
@@ -49,6 +53,16 @@ export default function App() {
     socketRef.current?.send(JSON.stringify({ type: 'RESET_GAME' }));
     setSelectedTeamId(null);
     setInputCode('');
+  };
+
+  const joinRoom = () => {
+    if (joinCode.toUpperCase() === gameState?.roomCode) {
+      setHasJoined(true);
+      setJoinError(false);
+    } else {
+      setJoinError(true);
+      setTimeout(() => setJoinError(false), 1000);
+    }
   };
 
   const submitCode = (code: string) => {
@@ -71,6 +85,51 @@ export default function App() {
   if (!gameState) return (
     <div className="min-h-screen bg-[#0a0a0a] flex items-center justify-center">
       <div className="animate-pulse text-gold-500 font-mono">INITIALIZING VAULT CONNECTION...</div>
+    </div>
+  );
+
+  if (!hasJoined && !isHost) return (
+    <div className="min-h-screen bg-[#050505] flex items-center justify-center p-6">
+      <div className="fixed inset-0 pointer-events-none overflow-hidden">
+        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-orange-900/10 blur-[120px] rounded-full" />
+        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-blue-900/10 blur-[120px] rounded-full" />
+      </div>
+      
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.9 }}
+        animate={{ opacity: 1, scale: 1 }}
+        className="max-w-md w-full bg-white/5 border border-white/10 p-8 rounded-3xl backdrop-blur-xl shadow-2xl text-center"
+      >
+        <div className="mb-8">
+          <div className="inline-block p-4 bg-orange-500/10 rounded-2xl border border-orange-500/20 mb-4">
+            <Lock className="w-12 h-12 text-orange-500" />
+          </div>
+          <h1 className="text-3xl font-bold tracking-tighter uppercase italic mb-2">Access Portal</h1>
+          <p className="text-white/40 text-sm">Enter the secure room code to join the heist.</p>
+        </div>
+
+        <div className="space-y-4">
+          <input 
+            type="text" 
+            value={joinCode}
+            onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
+            placeholder="ROOM CODE"
+            className={`w-full bg-black/50 border ${joinError ? 'border-red-500 animate-shake' : 'border-white/10'} rounded-xl px-6 py-4 text-center text-2xl font-mono tracking-[0.5em] focus:outline-none focus:border-orange-500 transition-all`}
+          />
+          <button 
+            onClick={joinRoom}
+            className="w-full py-4 bg-orange-500 text-black font-bold rounded-xl hover:bg-orange-400 active:scale-95 transition-all"
+          >
+            JOIN HEIST
+          </button>
+          <button 
+            onClick={() => setIsHost(true)}
+            className="text-white/20 text-xs uppercase tracking-widest hover:text-white/40 transition-colors"
+          >
+            Host a new session
+          </button>
+        </div>
+      </motion.div>
     </div>
   );
 
@@ -98,28 +157,44 @@ export default function App() {
             </div>
           </div>
 
-          {gameState.isStarted && (
-            <div className="flex items-center gap-2 overflow-x-auto pb-2 max-w-full">
-              {gameState.teams.map(team => (
-                <button
-                  key={team.id}
-                  onClick={() => {
-                    setSelectedTeamId(team.id);
-                    setInputCode(team.enteredCode);
-                  }}
-                  className={`px-4 py-2 rounded-lg font-mono text-sm transition-all border ${
-                    selectedTeamId === team.id 
-                      ? 'bg-orange-500 border-orange-400 text-black shadow-[0_0_15px_rgba(249,115,22,0.4)]' 
-                      : team.isSolved 
-                        ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400'
-                        : 'bg-white/5 border-white/10 text-white/60 hover:bg-white/10'
-                  }`}
-                >
-                  TEAM {team.id}
-                </button>
-              ))}
-            </div>
-          )}
+          <div className="flex items-center gap-6">
+            {isHost && (
+              <div className="flex items-center gap-3 px-4 py-2 bg-white/5 border border-white/10 rounded-xl">
+                <div className="text-right">
+                  <div className="text-[10px] font-mono text-white/40 uppercase">Room Code</div>
+                  <div className="text-lg font-bold text-orange-500 tracking-widest">{gameState.roomCode}</div>
+                </div>
+                <div className="w-px h-8 bg-white/10" />
+                <div className="text-right">
+                  <div className="text-[10px] font-mono text-white/40 uppercase">Agents</div>
+                  <div className="text-lg font-bold text-white">{gameState.connectedPlayers}</div>
+                </div>
+              </div>
+            )}
+
+            {gameState.isStarted && !isHost && (
+              <div className="flex items-center gap-2 overflow-x-auto pb-2 max-w-full">
+                {gameState.teams.map(team => (
+                  <button
+                    key={team.id}
+                    onClick={() => {
+                      setSelectedTeamId(team.id);
+                      setInputCode(team.enteredCode);
+                    }}
+                    className={`px-4 py-2 rounded-lg font-mono text-sm transition-all border ${
+                      selectedTeamId === team.id 
+                        ? 'bg-orange-500 border-orange-400 text-black shadow-[0_0_15px_rgba(249,115,22,0.4)]' 
+                        : team.isSolved 
+                          ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400'
+                          : 'bg-white/5 border-white/10 text-white/60 hover:bg-white/10'
+                    }`}
+                  >
+                    TEAM {team.id}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </header>
 
         <main>
@@ -127,77 +202,216 @@ export default function App() {
             <motion.div 
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              className="max-w-xl mx-auto text-center py-20"
+              className="max-w-2xl mx-auto text-center py-12"
             >
-              <h2 className="text-5xl font-bold mb-6 tracking-tight">MISSION SETUP</h2>
-              <p className="text-white/60 mb-12 leading-relaxed">
-                Welcome, operatives. You are about to attempt the most sophisticated digital heist in history. 
-                Coordinate with your fellow teams to bypass the triple-layer security grid.
-              </p>
-              
-              <div className="bg-white/5 border border-white/10 p-8 rounded-2xl mb-8">
-                <label className="block text-xs font-mono text-white/40 uppercase tracking-widest mb-4">Number of Active Teams</label>
-                <div className="flex justify-center gap-4">
-                  {[2, 3, 4].map(n => (
-                    <button
-                      key={n}
-                      onClick={() => setTeamCount(n)}
-                      className={`w-16 h-16 rounded-xl font-bold text-xl transition-all border ${
-                        teamCount === n ? 'bg-orange-500 border-orange-400 text-black' : 'bg-white/5 border-white/10 hover:bg-white/10'
-                      }`}
-                    >
-                      {n}
-                    </button>
-                  ))}
-                </div>
+              <div className="mb-12">
+                <h2 className="text-5xl font-bold mb-6 tracking-tight">HEIST LOBBY</h2>
+                <p className="text-white/60 leading-relaxed">
+                  {isHost 
+                    ? "Game Master, prepare the mission. Share the room code with your agents and initiate the heist when all teams are ready."
+                    : "Waiting for the Game Master to initiate the heist. Coordinate with your team and prepare for extraction."}
+                </p>
               </div>
 
-              <button
-                onClick={startGame}
-                className="group relative w-full py-5 bg-white text-black font-bold text-xl rounded-xl overflow-hidden transition-all hover:scale-[1.02] active:scale-95"
-              >
-                <div className="absolute inset-0 bg-orange-500 translate-y-full group-hover:translate-y-0 transition-transform duration-300" />
-                <span className="relative z-10 flex items-center justify-center gap-3">
-                  INITIATE HEIST <ChevronRight className="w-6 h-6" />
-                </span>
-              </button>
+              {isHost ? (
+                <div className="space-y-8">
+                  <div className="bg-white/5 border border-white/10 p-10 rounded-3xl backdrop-blur-xl">
+                    <div className="text-xs font-mono text-white/40 uppercase tracking-widest mb-6">Mission Configuration</div>
+                    <div className="flex flex-col items-center gap-8">
+                      <div className="space-y-4 w-full">
+                        <label className="block text-xs font-mono text-white/40 uppercase tracking-widest">Number of Active Teams</label>
+                        <div className="flex justify-center gap-4">
+                          {[2, 3, 4].map(n => (
+                            <button
+                              key={n}
+                              onClick={() => setTeamCount(n)}
+                              className={`w-20 h-20 rounded-2xl font-bold text-2xl transition-all border ${
+                                teamCount === n ? 'bg-orange-500 border-orange-400 text-black shadow-[0_0_20px_rgba(249,115,22,0.3)]' : 'bg-white/5 border-white/10 hover:bg-white/10'
+                              }`}
+                            >
+                              {n}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="w-full p-6 bg-black/30 rounded-2xl border border-white/5">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-xs font-mono text-white/40">CONNECTED AGENTS</span>
+                          <span className="text-orange-500 font-bold">{gameState.connectedPlayers}</span>
+                        </div>
+                        <div className="w-full bg-white/5 h-2 rounded-full overflow-hidden">
+                          <motion.div 
+                            className="h-full bg-orange-500"
+                            initial={{ width: 0 }}
+                            animate={{ width: `${Math.min(100, (gameState.connectedPlayers / 10) * 100)}%` }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={startGame}
+                    className="group relative w-full py-6 bg-white text-black font-bold text-2xl rounded-2xl overflow-hidden transition-all hover:scale-[1.02] active:scale-95 shadow-2xl"
+                  >
+                    <div className="absolute inset-0 bg-orange-500 translate-y-full group-hover:translate-y-0 transition-transform duration-300" />
+                    <span className="relative z-10 flex items-center justify-center gap-3 tracking-tighter">
+                      INITIATE MISSION <ChevronRight className="w-8 h-8" />
+                    </span>
+                  </button>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center gap-8">
+                  <div className="relative">
+                    <div className="w-32 h-32 border-4 border-orange-500/20 border-t-orange-500 rounded-full animate-spin" />
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <Users className="w-10 h-10 text-orange-500 animate-pulse" />
+                    </div>
+                  </div>
+                  <div className="text-xs font-mono text-white/40 uppercase tracking-[0.3em]">Awaiting Command...</div>
+                </div>
+              )}
             </motion.div>
           ) : gameState.isVaultOpen ? (
             <motion.div 
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              className="text-center py-20"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black overflow-hidden"
             >
-              <div className="inline-block p-6 bg-emerald-500/20 rounded-full mb-8 border border-emerald-500/40 animate-pulse">
-                <Unlock className="w-24 h-24 text-emerald-500" />
-              </div>
-              <h2 className="text-7xl font-bold mb-4 tracking-tighter uppercase italic text-emerald-500">Vault Breached</h2>
-              <p className="text-xl text-white/60 mb-12 max-w-2xl mx-auto">
-                All security layers have been bypassed. The assets are ours. 
-                Extraction team is 2 minutes out.
-              </p>
-              
-              <div className="flex justify-center gap-6 mb-12">
-                <div className="bg-white/5 border border-white/10 p-6 rounded-2xl">
-                  <div className="text-xs font-mono text-white/40 uppercase mb-1">Total Time</div>
-                  <div className="text-3xl font-bold text-orange-500">
-                    {Math.floor((Date.now() - (gameState.startTime || 0)) / 60000)}m {Math.floor(((Date.now() - (gameState.startTime || 0)) % 60000) / 1000)}s
-                  </div>
-                </div>
-              </div>
-
-              <button
-                onClick={resetGame}
-                className="px-8 py-4 bg-white/5 border border-white/10 rounded-xl hover:bg-white/10 transition-all flex items-center gap-2 mx-auto"
+              {/* Dramatic Background Effects */}
+              <motion.div 
+                animate={{ 
+                  scale: [1, 1.2, 1],
+                  rotate: [0, 5, -5, 0]
+                }}
+                transition={{ duration: 10, repeat: Infinity }}
+                className="absolute inset-0 opacity-20"
               >
-                <RefreshCcw className="w-5 h-5" /> RESET SYSTEM
-              </button>
+                <div className="absolute top-0 left-0 w-full h-full bg-gradient-to-br from-emerald-500/20 via-transparent to-orange-500/20" />
+              </motion.div>
+
+              {/* Confetti-like particles */}
+              {Array.from({ length: 50 }).map((_, i) => (
+                <motion.div
+                  key={i}
+                  initial={{ 
+                    x: Math.random() * window.innerWidth, 
+                    y: -20,
+                    rotate: 0,
+                    opacity: 1
+                  }}
+                  animate={{ 
+                    y: window.innerHeight + 20,
+                    rotate: 360,
+                    opacity: 0
+                  }}
+                  transition={{ 
+                    duration: Math.random() * 3 + 2, 
+                    repeat: Infinity,
+                    delay: Math.random() * 5
+                  }}
+                  className={`absolute w-2 h-2 rounded-full ${i % 2 === 0 ? 'bg-emerald-500' : 'bg-orange-500'}`}
+                />
+              ))}
+
+              <div className="relative z-10 text-center px-6">
+                <motion.div
+                  initial={{ scale: 0, rotate: -180 }}
+                  animate={{ scale: 1, rotate: 0 }}
+                  transition={{ type: 'spring', damping: 10, stiffness: 100 }}
+                  className="inline-block p-10 bg-emerald-500 rounded-full mb-12 shadow-[0_0_100px_rgba(16,185,129,0.5)]"
+                >
+                  <Unlock className="w-32 h-32 text-black" />
+                </motion.div>
+
+                <motion.h2 
+                  initial={{ y: 50, opacity: 0 }}
+                  animate={{ y: 0, opacity: 1 }}
+                  transition={{ delay: 0.3 }}
+                  className="text-8xl font-black mb-6 tracking-tighter uppercase italic text-transparent bg-clip-text bg-gradient-to-b from-white to-emerald-500"
+                >
+                  Vault Breached
+                </motion.h2>
+
+                <motion.p 
+                  initial={{ y: 20, opacity: 0 }}
+                  animate={{ y: 0, opacity: 1 }}
+                  transition={{ delay: 0.5 }}
+                  className="text-2xl text-white/60 mb-16 max-w-3xl mx-auto font-light tracking-wide"
+                >
+                  The digital fortress has fallen. All assets secured. 
+                  Extraction protocols initiated.
+                </motion.p>
+                
+                <motion.div 
+                  initial={{ scale: 0.8, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  transition={{ delay: 0.7 }}
+                  className="flex flex-col md:flex-row justify-center gap-8 mb-16"
+                >
+                  <div className="bg-white/5 border border-white/10 px-12 py-8 rounded-3xl backdrop-blur-xl">
+                    <div className="text-xs font-mono text-white/40 uppercase mb-2 tracking-widest">Mission Duration</div>
+                    <div className="text-5xl font-bold text-emerald-500">
+                      {Math.floor((Date.now() - (gameState.startTime || 0)) / 60000)}:
+                      {String(Math.floor(((Date.now() - (gameState.startTime || 0)) % 60000) / 1000)).padStart(2, '0')}
+                    </div>
+                  </div>
+                  <div className="bg-white/5 border border-white/10 px-12 py-8 rounded-3xl backdrop-blur-xl">
+                    <div className="text-xs font-mono text-white/40 uppercase mb-2 tracking-widest">Security Level</div>
+                    <div className="text-5xl font-bold text-orange-500">CRACKED</div>
+                  </div>
+                </motion.div>
+
+                {isHost && (
+                  <motion.button
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ delay: 1.5 }}
+                    onClick={resetGame}
+                    className="px-12 py-5 bg-white text-black font-bold rounded-2xl hover:bg-emerald-500 transition-all flex items-center gap-3 mx-auto shadow-2xl"
+                  >
+                    <RefreshCcw className="w-6 h-6" /> RESET SYSTEM FOR NEXT HEIST
+                  </motion.button>
+                )}
+              </div>
             </motion.div>
           ) : (
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
               {/* Left Column: Puzzles */}
               <div className="lg:col-span-7 space-y-6">
-                {!selectedTeamId ? (
+                {isHost ? (
+                  <div className="bg-white/5 border border-white/10 rounded-3xl p-8 h-full">
+                    <h3 className="text-2xl font-bold mb-8 flex items-center gap-3">
+                      <Users className="w-6 h-6 text-orange-500" /> MISSION OVERVIEW
+                    </h3>
+                    <div className="space-y-6">
+                      {gameState.teams.map(team => (
+                        <div key={team.id} className="p-6 bg-black/30 border border-white/5 rounded-2xl flex items-center justify-between">
+                          <div>
+                            <div className="text-lg font-bold">TEAM {team.id}</div>
+                            <div className="text-xs font-mono text-white/40">CODE: {team.code}</div>
+                          </div>
+                          <div className="flex items-center gap-4">
+                            <div className="text-right">
+                              <div className="text-[10px] font-mono text-white/40 uppercase">Progress</div>
+                              <div className="text-sm font-bold text-white">{team.enteredCode.length}/3 DIGITS</div>
+                            </div>
+                            {team.isSolved ? (
+                              <div className="p-2 bg-emerald-500/20 rounded-lg border border-emerald-500/40">
+                                <Unlock className="w-5 h-5 text-emerald-500" />
+                              </div>
+                            ) : (
+                              <div className="p-2 bg-white/5 rounded-lg border border-white/10">
+                                <Lock className="w-5 h-5 text-white/20" />
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : !selectedTeamId ? (
                   <div className="h-full flex flex-col items-center justify-center border-2 border-dashed border-white/10 rounded-3xl p-12 text-center">
                     <Users className="w-16 h-16 text-white/20 mb-4" />
                     <h3 className="text-xl font-bold mb-2">Select Your Team</h3>
@@ -290,7 +504,7 @@ export default function App() {
                 </div>
 
                 {/* Team Keypad */}
-                {selectedTeamId && (
+                {!isHost && selectedTeamId && (
                   <motion.div 
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
