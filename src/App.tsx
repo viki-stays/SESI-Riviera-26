@@ -63,6 +63,8 @@ export default function App() {
   const resetGame = () => {
     socketRef.current?.send(JSON.stringify({ type: 'RESET_GAME' }));
     setSelectedTeamId(null);
+    setClaimedTeamId(null);
+    localStorage.removeItem('vault_claimed_team');
     setInputCode('');
   };
 
@@ -452,6 +454,12 @@ export default function App() {
                         <Users className="w-6 h-6 text-orange-500" /> MISSION OVERVIEW
                       </h3>
                       <div className="flex gap-4">
+                        <button 
+                          onClick={resetGame}
+                          className="px-4 py-2 bg-red-500/10 border border-red-500/20 text-red-500 rounded-lg text-xs font-bold hover:bg-red-500/20 transition-all flex items-center gap-2"
+                        >
+                          <RefreshCcw className="w-4 h-4" /> RESET GAME
+                        </button>
                         <button 
                           onClick={downloadReport}
                           className="px-4 py-2 bg-white/5 border border-white/10 rounded-lg text-xs font-mono hover:bg-white/10 transition-all flex items-center gap-2"
