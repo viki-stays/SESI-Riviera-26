@@ -25,6 +25,17 @@ export default function App() {
   const [hasJoined, setHasJoined] = useState(false);
   const [joinCode, setJoinCode] = useState('');
   const [joinError, setJoinError] = useState(false);
+  const [clientId] = useState(() => {
+    const saved = localStorage.getItem('vault_client_id');
+    if (saved) return saved;
+    const id = Math.random().toString(36).substring(7);
+    localStorage.setItem('vault_client_id', id);
+    return id;
+  });
+  const [claimedTeamId, setClaimedTeamId] = useState<number | null>(() => {
+    const saved = localStorage.getItem('vault_claimed_team');
+    return saved ? parseInt(saved) : null;
+  });
   const socketRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
@@ -63,6 +74,59 @@ export default function App() {
       setJoinError(true);
       setTimeout(() => setJoinError(false), 1000);
     }
+  };
+
+  const claimTeam = (teamId: number) => {
+    socketRef.current?.send(JSON.stringify({ type: 'CLAIM_TEAM', teamId, clientId }));
+    setClaimedTeamId(teamId);
+    setSelectedTeamId(teamId);
+    localStorage.setItem('vault_claimed_team', teamId.toString());
+  };
+
+  const updateTeamName = (teamId: number, name: string) => {
+    socketRef.current?.send(JSON.stringify({ type: 'UPDATE_TEAM_NAME', teamId, name }));
+  };
+
+  const updatePuzzle = (teamId: number, puzzleId: string, field: string, value: string) => {
+    socketRef.current?.send(JSON.stringify({ type: 'UPDATE_PUZZLE', teamId, puzzleId, field, value }));
+  };
+
+  const addTeam = () => {
+    socketRef.current?.send(JSON.stringify({ type: 'ADD_TEAM' }));
+  };
+
+  const removeTeam = (teamId: number) => {
+    socketRef.current?.send(JSON.stringify({ type: 'REMOVE_TEAM', teamId }));
+  };
+
+  const startTeam = (teamId: number) => {
+    socketRef.current?.send(JSON.stringify({ type: 'START_TEAM', teamId }));
+  };
+
+  const downloadReport = () => {
+    if (!gameState) return;
+    const headers = ['Team ID', 'Team Name', 'Start Time', 'Solve Time', 'Duration (s)'];
+    const rows = gameState.teams.map(t => {
+      const duration = t.solveTime && t.startTime ? (t.solveTime - t.startTime) / 1000 : 'N/A';
+      return [
+        t.id,
+        t.name,
+        t.startTime ? new Date(t.startTime).toLocaleTimeString() : 'N/A',
+        t.solveTime ? new Date(t.solveTime).toLocaleTimeString() : 'N/A',
+        duration
+      ];
+    });
+
+    const csvContent = [headers, ...rows].map(e => e.join(",")).join("\n");
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    link.setAttribute("href", url);
+    link.setAttribute("download", `vault_breach_report_${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   const submitCode = (code: string) => {
@@ -220,12 +284,12 @@ export default function App() {
                     <div className="flex flex-col items-center gap-8">
                       <div className="space-y-4 w-full">
                         <label className="block text-xs font-mono text-white/40 uppercase tracking-widest">Number of Active Teams</label>
-                        <div className="flex justify-center gap-4">
-                          {[2, 3, 4].map(n => (
+                        <div className="flex flex-wrap justify-center gap-2">
+                          {[2, 4, 6, 8, 10, 12, 14, 16].map(n => (
                             <button
                               key={n}
                               onClick={() => setTeamCount(n)}
-                              className={`w-20 h-20 rounded-2xl font-bold text-2xl transition-all border ${
+                              className={`w-14 h-14 rounded-xl font-bold text-lg transition-all border ${
                                 teamCount === n ? 'bg-orange-500 border-orange-400 text-black shadow-[0_0_20px_rgba(249,115,22,0.3)]' : 'bg-white/5 border-white/10 hover:bg-white/10'
                               }`}
                             >
@@ -381,84 +445,199 @@ export default function App() {
               {/* Left Column: Puzzles */}
               <div className="lg:col-span-7 space-y-6">
                 {isHost ? (
+                  <div className="space-y-8">
                   <div className="bg-white/5 border border-white/10 rounded-3xl p-8 h-full">
-                    <h3 className="text-2xl font-bold mb-8 flex items-center gap-3">
-                      <Users className="w-6 h-6 text-orange-500" /> MISSION OVERVIEW
-                    </h3>
-                    <div className="space-y-6">
+                    <div className="flex items-center justify-between mb-8">
+                      <h3 className="text-2xl font-bold flex items-center gap-3">
+                        <Users className="w-6 h-6 text-orange-500" /> MISSION OVERVIEW
+                      </h3>
+                      <div className="flex gap-4">
+                        <button 
+                          onClick={downloadReport}
+                          className="px-4 py-2 bg-white/5 border border-white/10 rounded-lg text-xs font-mono hover:bg-white/10 transition-all flex items-center gap-2"
+                        >
+                          <ChevronRight className="w-4 h-4 rotate-90" /> EXPORT REPORT
+                        </button>
+                        <button 
+                          onClick={addTeam}
+                          className="px-4 py-2 bg-orange-500 text-black rounded-lg text-xs font-bold hover:bg-orange-400 transition-all"
+                        >
+                          + ADD TEAM
+                        </button>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                       {gameState.teams.map(team => (
-                        <div key={team.id} className="p-6 bg-black/30 border border-white/5 rounded-2xl flex items-center justify-between">
-                          <div>
-                            <div className="text-lg font-bold">TEAM {team.id}</div>
-                            <div className="text-xs font-mono text-white/40">CODE: {team.code}</div>
-                          </div>
-                          <div className="flex items-center gap-4">
-                            <div className="text-right">
-                              <div className="text-[10px] font-mono text-white/40 uppercase">Progress</div>
-                              <div className="text-sm font-bold text-white">{team.enteredCode.length}/3 DIGITS</div>
+                        <div key={team.id} className="p-6 bg-black/30 border border-white/5 rounded-2xl space-y-4">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                              <div className="text-lg font-bold">TEAM {team.id}</div>
+                              <input 
+                                type="text"
+                                value={team.name}
+                                onChange={(e) => updateTeamName(team.id, e.target.value)}
+                                className="bg-white/5 border border-white/10 rounded px-2 py-1 text-xs font-mono focus:outline-none focus:border-orange-500"
+                              />
                             </div>
-                            {team.isSolved ? (
-                              <div className="p-2 bg-emerald-500/20 rounded-lg border border-emerald-500/40">
-                                <Unlock className="w-5 h-5 text-emerald-500" />
+                            <button 
+                              onClick={() => removeTeam(team.id)}
+                              className="text-red-500 hover:text-red-400 transition-colors"
+                            >
+                              <RefreshCcw className="w-4 h-4" />
+                            </button>
+                          </div>
+                          
+                          <div className="space-y-2">
+                            {team.puzzles.map(puzzle => (
+                              <div key={puzzle.id} className="p-3 bg-white/5 rounded-xl border border-white/5 space-y-2">
+                                <div className="flex items-center justify-between text-[10px] font-mono text-white/40 uppercase">
+                                  <span>{puzzle.type}</span>
+                                  <input 
+                                    type="text"
+                                    value={puzzle.answer}
+                                    onChange={(e) => updatePuzzle(team.id, puzzle.id, 'answer', e.target.value)}
+                                    className="w-8 bg-black/50 border border-white/10 rounded text-center text-orange-500 focus:outline-none focus:border-orange-500"
+                                  />
+                                </div>
+                                <textarea 
+                                  value={puzzle.question}
+                                  onChange={(e) => updatePuzzle(team.id, puzzle.id, 'question', e.target.value)}
+                                  className="w-full bg-transparent border-none text-xs text-white/60 focus:outline-none resize-none h-12"
+                                />
                               </div>
+                            ))}
+                          </div>
+
+                          <div className="flex items-center justify-between pt-2 border-t border-white/5">
+                            <div className="text-[10px] font-mono text-white/40">
+                              {team.isSolved ? (
+                                <span className="text-emerald-500">BREACHED IN {Math.floor((team.solveTime! - team.startTime!) / 1000)}s</span>
+                              ) : (
+                                <span>PROGRESS: {team.enteredCode.length}/3</span>
+                              )}
+                            </div>
+                            {team.isClaimed ? (
+                              <div className="text-[10px] font-mono text-blue-400 uppercase">AGENT ACTIVE</div>
                             ) : (
-                              <div className="p-2 bg-white/5 rounded-lg border border-white/10">
-                                <Lock className="w-5 h-5 text-white/20" />
-                              </div>
+                              <div className="text-[10px] font-mono text-white/20 uppercase">AWAITING AGENT</div>
                             )}
                           </div>
                         </div>
                       ))}
                     </div>
                   </div>
-                ) : !selectedTeamId ? (
-                  <div className="h-full flex flex-col items-center justify-center border-2 border-dashed border-white/10 rounded-3xl p-12 text-center">
-                    <Users className="w-16 h-16 text-white/20 mb-4" />
-                    <h3 className="text-xl font-bold mb-2">Select Your Team</h3>
-                    <p className="text-white/40">Choose your team number from the top to view your assigned puzzles.</p>
+                </div>
+                ) : !claimedTeamId ? (
+                  <div className="bg-white/5 border border-white/10 rounded-3xl p-8 h-full">
+                    <h3 className="text-2xl font-bold mb-8 flex items-center gap-3">
+                      <Users className="w-6 h-6 text-orange-500" /> SELECT YOUR TEAM
+                    </h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {gameState.teams.map(team => (
+                        <button
+                          key={team.id}
+                          disabled={team.isClaimed}
+                          onClick={() => claimTeam(team.id)}
+                          className={`p-6 rounded-2xl border text-left transition-all ${
+                            team.isClaimed 
+                              ? 'bg-white/5 border-white/5 opacity-50 cursor-not-allowed' 
+                              : 'bg-white/5 border-white/10 hover:bg-white/10 hover:border-orange-500/50 group'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-lg font-bold group-hover:text-orange-500 transition-colors">{team.name}</span>
+                            {team.isClaimed ? (
+                              <span className="text-[10px] font-mono text-white/20 uppercase">OCCUPIED</span>
+                            ) : (
+                              <span className="text-[10px] font-mono text-emerald-500 uppercase">AVAILABLE</span>
+                            )}
+                          </div>
+                          <div className="text-xs text-white/40">Layer {team.id} Security Protocol</div>
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 ) : (
                   <motion.div
-                    key={selectedTeamId}
+                    key={claimedTeamId}
                     initial={{ opacity: 0, x: -20 }}
                     animate={{ opacity: 1, x: 0 }}
                     className="space-y-6"
                   >
                     <div className="flex items-center justify-between mb-4">
-                      <h3 className="text-2xl font-bold flex items-center gap-3">
-                        <span className="text-orange-500">TEAM {selectedTeamId}</span> ASSIGNMENT
-                      </h3>
-                      {selectedTeam?.isSolved && (
+                      <div className="flex items-center gap-4">
+                        <h3 className="text-2xl font-bold flex items-center gap-3">
+                          <input 
+                            type="text"
+                            value={gameState.teams.find(t => t.id === claimedTeamId)?.name || ''}
+                            onChange={(e) => updateTeamName(claimedTeamId, e.target.value)}
+                            className="bg-transparent border-b border-white/10 focus:border-orange-500 focus:outline-none transition-colors"
+                          />
+                        </h3>
+                        <div className="px-3 py-1 bg-orange-500/10 border border-orange-500/20 rounded-lg text-orange-500 text-xs font-mono">
+                          {(() => {
+                            const team = gameState.teams.find(t => t.id === claimedTeamId);
+                            if (!team || !team.startTime) return '00:00';
+                            const now = team.solveTime || Date.now();
+                            const diff = Math.max(0, Math.floor((now - team.startTime) / 1000));
+                            const m = Math.floor(diff / 60);
+                            const s = diff % 60;
+                            return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+                          })()}
+                        </div>
+                      </div>
+                      {gameState.teams.find(t => t.id === claimedTeamId)?.isSolved && (
                         <span className="px-3 py-1 bg-emerald-500/20 text-emerald-400 text-xs font-mono rounded-full border border-emerald-500/40">
                           LAYER BYPASSED
                         </span>
                       )}
                     </div>
 
-                    {selectedTeam?.puzzles.map((puzzle, idx) => (
-                      <div 
-                        key={puzzle.id}
-                        className="bg-white/5 border border-white/10 p-6 rounded-2xl relative overflow-hidden group"
-                      >
-                        <div className="absolute top-0 left-0 w-1 h-full bg-orange-500/50 group-hover:bg-orange-500 transition-colors" />
-                        <div className="flex items-start gap-4">
-                          <div className="p-3 bg-white/5 rounded-xl text-orange-500">
-                            {puzzle.type === 'logic' && <Zap className="w-6 h-6" />}
-                            {puzzle.type === 'visual' && <Eye className="w-6 h-6" />}
-                            {puzzle.type === 'physical' && <Move className="w-6 h-6" />}
+                    {(() => {
+                      const team = gameState.teams.find(t => t.id === claimedTeamId);
+                      if (!team) return null;
+                      
+                      if (!team.startTime) {
+                        return (
+                          <div className="flex flex-col items-center justify-center py-20 bg-white/5 border border-white/10 rounded-3xl">
+                            <Zap className="w-16 h-16 text-orange-500 mb-6 animate-pulse" />
+                            <h3 className="text-2xl font-bold mb-4 uppercase tracking-tighter">Ready to Breach?</h3>
+                            <p className="text-white/40 mb-8 max-w-xs text-center">Once you start, your team's timer will begin and security protocols will be revealed.</p>
+                            <button 
+                              onClick={() => startTeam(claimedTeamId)}
+                              className="px-12 py-4 bg-orange-500 text-black font-bold rounded-xl hover:bg-orange-400 transition-all active:scale-95 shadow-[0_0_30px_rgba(249,115,22,0.3)]"
+                            >
+                              START MISSION
+                            </button>
                           </div>
-                          <div>
-                            <div className="text-xs font-mono text-white/40 uppercase tracking-widest mb-1">
-                              Puzzle {idx + 1} • {puzzle.type}
+                        );
+                      }
+
+                      return team.puzzles.map((puzzle, idx) => (
+                        <div 
+                          key={puzzle.id}
+                          className="bg-white/5 border border-white/10 p-6 rounded-2xl relative overflow-hidden group"
+                        >
+                          <div className="absolute top-0 left-0 w-1 h-full bg-orange-500/50 group-hover:bg-orange-500 transition-colors" />
+                          <div className="flex items-start gap-4">
+                            <div className="p-3 bg-white/5 rounded-xl text-orange-500">
+                              {puzzle.type === 'logic' && <Zap className="w-6 h-6" />}
+                              {puzzle.type === 'visual' && <Eye className="w-6 h-6" />}
+                              {puzzle.type === 'physical' && <Move className="w-6 h-6" />}
                             </div>
-                            <p className="text-lg leading-relaxed">{puzzle.question}</p>
-                            <div className="mt-4 flex items-center gap-2 text-xs text-white/30 italic">
-                              <AlertCircle className="w-3 h-3" /> {puzzle.hint}
+                            <div>
+                              <div className="text-xs font-mono text-white/40 uppercase tracking-widest mb-1">
+                                Puzzle {idx + 1} • {puzzle.type}
+                              </div>
+                              <p className="text-lg leading-relaxed">{puzzle.question}</p>
+                              <div className="mt-4 flex items-center gap-2 text-xs text-white/30 italic">
+                                <AlertCircle className="w-3 h-3" /> {puzzle.hint}
+                              </div>
                             </div>
                           </div>
                         </div>
-                      </div>
-                    ))}
+                      ));
+                    })()}
                   </motion.div>
                 )}
               </div>
@@ -504,14 +683,14 @@ export default function App() {
                 </div>
 
                 {/* Team Keypad */}
-                {!isHost && selectedTeamId && (
+                {!isHost && claimedTeamId && gameState.teams.find(t => t.id === claimedTeamId)?.startTime && (
                   <motion.div 
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     className="bg-white/5 border border-white/10 p-8 rounded-3xl shadow-2xl"
                   >
                     <div className="text-center mb-8">
-                      <div className="text-xs font-mono text-white/40 uppercase tracking-widest mb-4">Enter Team {selectedTeamId} Code</div>
+                      <div className="text-xs font-mono text-white/40 uppercase tracking-widest mb-4">Enter {gameState.teams.find(t => t.id === claimedTeamId)?.name} Code</div>
                       <div className="flex justify-center gap-4">
                         {[0, 1, 2].map(i => (
                           <div 
@@ -533,7 +712,7 @@ export default function App() {
                         <button
                           key={n}
                           onClick={() => handleKeypadClick(n.toString())}
-                          disabled={selectedTeam?.isSolved}
+                          disabled={gameState.teams.find(t => t.id === claimedTeamId)?.isSolved}
                           className="h-16 rounded-xl bg-white/5 border border-white/10 text-xl font-bold hover:bg-white/10 active:scale-95 transition-all disabled:opacity-50"
                         >
                           {n}
@@ -541,14 +720,14 @@ export default function App() {
                       ))}
                       <button
                         onClick={clearInput}
-                        disabled={selectedTeam?.isSolved}
+                        disabled={gameState.teams.find(t => t.id === claimedTeamId)?.isSolved}
                         className="h-16 rounded-xl bg-red-500/10 border border-red-500/20 text-red-500 font-bold hover:bg-red-500/20 active:scale-95 transition-all disabled:opacity-50"
                       >
                         CLR
                       </button>
                       <button
                         onClick={() => handleKeypadClick('0')}
-                        disabled={selectedTeam?.isSolved}
+                        disabled={gameState.teams.find(t => t.id === claimedTeamId)?.isSolved}
                         className="h-16 rounded-xl bg-white/5 border border-white/10 text-xl font-bold hover:bg-white/10 active:scale-95 transition-all disabled:opacity-50"
                       >
                         0
@@ -561,7 +740,7 @@ export default function App() {
                       </button>
                     </div>
 
-                    {selectedTeam?.isSolved && (
+                    {gameState.teams.find(t => t.id === claimedTeamId)?.isSolved && (
                       <motion.div 
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}

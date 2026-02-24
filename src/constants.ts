@@ -96,12 +96,24 @@ export const TEAM_PUZZLES: Record<number, Puzzle[]> = {
 };
 
 export const INITIAL_TEAMS = (count: number): TeamData[] => {
-  return Array.from({ length: count }, (_, i) => ({
-    id: i + 1,
-    name: `Team ${i + 1}`,
-    puzzles: TEAM_PUZZLES[i + 1] || [],
-    code: (TEAM_PUZZLES[i + 1] || []).map(p => p.answer).join(''),
-    enteredCode: '',
-    isSolved: false
-  }));
+  return Array.from({ length: count }, (_, i) => {
+    const id = i + 1;
+    const puzzles = TEAM_PUZZLES[id] || [
+      { id: `t${id}-p1`, type: 'logic', question: "Default Logic Puzzle", hint: "Hint", answer: "1" },
+      { id: `t${id}-p2`, type: 'visual', question: "Default Visual Puzzle", hint: "Hint", answer: "2" },
+      { id: `t${id}-p3`, type: 'physical', question: "Default Physical Puzzle", hint: "Hint", answer: "3" },
+    ];
+    return {
+      id,
+      name: `Team ${id}`,
+      puzzles,
+      code: puzzles.map(p => p.answer).join(''),
+      enteredCode: '',
+      isSolved: false,
+      startTime: null,
+      solveTime: null,
+      isClaimed: false,
+      claimedBy: null
+    };
+  });
 };

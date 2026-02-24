@@ -43,12 +43,11 @@ async function startServer() {
 
         switch (message.type) {
           case "JOIN_ROOM":
-            // In this simple version, we only have one room, 
-            // but we validate the code for engagement.
             if (message.roomCode.toUpperCase() === gameState.roomCode) {
               ws.send(JSON.stringify({ type: "UPDATE", state: gameState }));
             }
             break;
+
           case "START_GAME":
             gameState = {
               ...gameState,
@@ -60,14 +59,75 @@ async function startServer() {
             broadcast({ type: "UPDATE", state: gameState });
             break;
 
+          case "CLAIM_TEAM":
+            const teamToClaim = gameState.teams.find(t => t.id === message.teamId);
+            if (teamToClaim && !teamToClaim.isClaimed) {
+              teamToClaim.isClaimed = true;
+              teamToClaim.claimedBy = message.clientId;
+              broadcast({ type: "UPDATE", state: gameState });
+            }
+            break;
+
+          case "UPDATE_TEAM_NAME":
+            const teamToRename = gameState.teams.find(t => t.id === message.teamId);
+            if (teamToRename) {
+              teamToRename.name = message.name;
+              broadcast({ type: "UPDATE", state: gameState });
+            }
+            break;
+
+          case "UPDATE_PUZZLE":
+            const teamWithPuzzle = gameState.teams.find(t => t.id === message.teamId);
+            if (teamWithPuzzle) {
+              const puzzle = teamWithPuzzle.puzzles.find(p => p.id === message.puzzleId);
+              if (puzzle) {
+                (puzzle as any)[message.field] = message.value;
+                // Recalculate code if answer changed
+                if (message.field === 'answer') {
+                  teamWithPuzzle.code = teamWithPuzzle.puzzles.map(p => p.answer).join('');
+                }
+                broadcast({ type: "UPDATE", state: gameState });
+              }
+            }
+            break;
+
+          case "ADD_TEAM":
+            if (gameState.teams.length < 16) {
+              const newId = gameState.teams.length > 0 ? Math.max(...gameState.teams.map(t => t.id)) + 1 : 1;
+              const newTeam = INITIAL_TEAMS(1)[0];
+              newTeam.id = newId;
+              newTeam.name = `Team ${newId}`;
+              gameState.teams.push(newTeam);
+              broadcast({ type: "UPDATE", state: gameState });
+            }
+            break;
+
+          case "REMOVE_TEAM":
+            gameState.teams = gameState.teams.filter(t => t.id !== message.teamId);
+            broadcast({ type: "UPDATE", state: gameState });
+            break;
+
+          case "START_TEAM":
+            const teamToStart = gameState.teams.find(t => t.id === message.teamId);
+            if (teamToStart && !teamToStart.startTime) {
+              teamToStart.startTime = Date.now();
+              broadcast({ type: "UPDATE", state: gameState });
+            }
+            break;
+
           case "SUBMIT_CODE":
             const team = gameState.teams.find((t) => t.id === message.teamId);
             if (team) {
               team.enteredCode = message.code;
+              const wasSolved = team.isSolved;
               team.isSolved = team.enteredCode === team.code;
               
+              if (team.isSolved && !wasSolved) {
+                team.solveTime = Date.now();
+              }
+
               // Check if all teams solved
-              const allSolved = gameState.teams.every((t) => t.isSolved);
+              const allSolved = gameState.teams.length > 0 && gameState.teams.every((t) => t.isSolved);
               if (allSolved) {
                 gameState.isVaultOpen = true;
                 broadcast({ type: "VAULT_OPENED" });
