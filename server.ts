@@ -2,6 +2,8 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import { WebSocketServer, WebSocket } from "ws";
 import http from "http";
+import path from "path";
+import fs from "fs";
 import { GameState, ClientMessage, ServerMessage } from "./src/types";
 import { INITIAL_TEAMS } from "./src/constants";
 
@@ -10,6 +12,8 @@ async function startServer() {
   const server = http.createServer(app);
   const wss = new WebSocketServer({ server });
   const PORT = 3000;
+
+  app.use(express.json());
 
   function generateRoomCode() {
     return Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -160,18 +164,27 @@ async function startServer() {
   });
 
   // Vite middleware for development
-  if (process.env.NODE_ENV !== "production") {
+  const isProd = process.env.NODE_ENV === "production";
+  const distPath = path.resolve("dist");
+  const hasDist = fs.existsSync(distPath);
+
+  if (isProd && hasDist) {
+    console.log("Serving production build from dist...");
+    app.use(express.static(distPath));
+    app.get("*", (req, res) => {
+      res.sendFile(path.resolve(distPath, "index.html"));
+    });
+  } else {
+    console.log("Starting development server with Vite middleware...");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
     });
     app.use(vite.middlewares);
-  } else {
-    app.use(express.static("dist"));
   }
 
   server.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Server running on http://0.0.0.0:${PORT}`);
   });
 }
 

@@ -50,6 +50,13 @@ export default function App() {
       const message: ServerMessage = JSON.parse(event.data);
       if (message.type === 'INIT' || message.type === 'UPDATE') {
         setGameState(message.state);
+        
+        // If game is reset to lobby, clear local team state
+        if (!message.state.isStarted) {
+          setClaimedTeamId(null);
+          setSelectedTeamId(null);
+          localStorage.removeItem('vault_claimed_team');
+        }
       }
     };
 
@@ -187,12 +194,6 @@ export default function App() {
             className="w-full py-4 bg-orange-500 text-black font-bold rounded-xl hover:bg-orange-400 active:scale-95 transition-all"
           >
             JOIN HEIST
-          </button>
-          <button 
-            onClick={() => setIsHost(true)}
-            className="text-white/20 text-xs uppercase tracking-widest hover:text-white/40 transition-colors"
-          >
-            Host a new session
           </button>
         </div>
       </motion.div>
@@ -740,12 +741,9 @@ export default function App() {
                       >
                         0
                       </button>
-                      <button
-                        onClick={() => resetGame()}
-                        className="h-16 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center hover:bg-white/10 active:scale-95 transition-all"
-                      >
-                        <RefreshCcw className="w-6 h-6 text-white/40" />
-                      </button>
+                      <div className="h-16 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center opacity-20">
+                        <Lock className="w-6 h-6 text-white/40" />
+                      </div>
                     </div>
 
                     {gameState.teams.find(t => t.id === claimedTeamId)?.isSolved && (
