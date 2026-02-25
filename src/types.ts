@@ -25,6 +25,7 @@ export interface GameState {
   isVaultOpen: boolean;
   teams: TeamData[];
   startTime: number | null;
+  roomCode: string;
   connectedPlayers: number;
 }
 
@@ -37,6 +38,7 @@ export type ClientMessage =
   | { type: 'START_GAME'; teamCount: number }
   | { type: 'SUBMIT_CODE'; teamId: number; code: string }
   | { type: 'RESET_GAME' }
+  | { type: 'JOIN_ROOM'; roomCode: string }
   | { type: 'CLAIM_TEAM'; teamId: number; clientId: string }
   | { type: 'UPDATE_TEAM_NAME'; teamId: number; name: string }
   | { type: 'UPDATE_PUZZLE'; teamId: number; puzzleId: string; field: keyof Puzzle; value: string }

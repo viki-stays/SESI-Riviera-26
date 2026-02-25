@@ -12,12 +12,16 @@ async function startServer() {
   const wss = new WebSocketServer({ server });
   const PORT = 3000;
 
-  // Global Game State - This lives on the server and is shared by ALL devices
+  function generateRoomCode() {
+    return Math.random().toString(36).substring(2, 8).toUpperCase();
+  }
+
   let gameState: GameState = {
     isStarted: false,
     isVaultOpen: false,
     teams: [],
     startTime: null,
+    roomCode: generateRoomCode(),
     connectedPlayers: 0,
   };
 
@@ -32,9 +36,6 @@ async function startServer() {
 
   wss.on("connection", (ws) => {
     gameState.connectedPlayers = wss.clients.size;
-    
-    // Send current game state to the newly connected device
-    ws.send(JSON.stringify({ type: "INIT", state: gameState }));
     broadcast({ type: "UPDATE", state: gameState });
 
     ws.on("message", (data) => {
@@ -42,60 +43,51 @@ async function startServer() {
         const message: ClientMessage = JSON.parse(data.toString());
 
         switch (message.type) {
-          case "START_GAME":
-            gameState.isStarted = true;
-            gameState.isVaultOpen = false;
-            gameState.teams = INITIAL_TEAMS(message.teamCount);
-            gameState.startTime = Date.now();
-            break;
-
-          case "SUBMIT_CODE":
-            const team = gameState.teams.find((t) => t.id === message.teamId);
-            if (team) {
-              team.enteredCode = message.code;
-              if (message.code === team.code) {
-                team.isSolved = true;
-                team.solveTime = Date.now();
-              }
-              
-              const allSolved = gameState.teams.length > 0 && gameState.teams.every(t => t.isSolved);
-              if (allSolved) {
-                gameState.isVaultOpen = true;
-              }
+          case "JOIN_ROOM":
+            if (message.roomCode.toUpperCase() === gameState.roomCode) {
+              ws.send(JSON.stringify({ type: "UPDATE", state: gameState }));
             }
             break;
 
-          case "RESET_GAME":
-            gameState.isStarted = false;
-            gameState.isVaultOpen = false;
-            gameState.teams = [];
-            gameState.startTime = null;
+          case "START_GAME":
+            gameState = {
+              ...gameState,
+              isStarted: true,
+              isVaultOpen: false,
+              teams: INITIAL_TEAMS(message.teamCount),
+              startTime: Date.now(),
+            };
+            broadcast({ type: "UPDATE", state: gameState });
             break;
 
           case "CLAIM_TEAM":
-            const teamToClaim = gameState.teams.find((t) => t.id === message.teamId);
-            if (teamToClaim) {
+            const teamToClaim = gameState.teams.find(t => t.id === message.teamId);
+            if (teamToClaim && !teamToClaim.isClaimed) {
               teamToClaim.isClaimed = true;
               teamToClaim.claimedBy = message.clientId;
+              broadcast({ type: "UPDATE", state: gameState });
             }
             break;
 
           case "UPDATE_TEAM_NAME":
-            const teamToRename = gameState.teams.find((t) => t.id === message.teamId);
+            const teamToRename = gameState.teams.find(t => t.id === message.teamId);
             if (teamToRename) {
               teamToRename.name = message.name;
+              broadcast({ type: "UPDATE", state: gameState });
             }
             break;
 
           case "UPDATE_PUZZLE":
-            const teamWithPuzzle = gameState.teams.find((t) => t.id === message.teamId);
+            const teamWithPuzzle = gameState.teams.find(t => t.id === message.teamId);
             if (teamWithPuzzle) {
               const puzzle = teamWithPuzzle.puzzles.find(p => p.id === message.puzzleId);
               if (puzzle) {
                 (puzzle as any)[message.field] = message.value;
+                // Recalculate code if answer changed
                 if (message.field === 'answer') {
                   teamWithPuzzle.code = teamWithPuzzle.puzzles.map(p => p.answer).join('');
                 }
+                broadcast({ type: "UPDATE", state: gameState });
               }
             }
             break;
@@ -107,25 +99,58 @@ async function startServer() {
               newTeam.id = newId;
               newTeam.name = `Team ${newId}`;
               gameState.teams.push(newTeam);
+              broadcast({ type: "UPDATE", state: gameState });
             }
             break;
 
           case "REMOVE_TEAM":
             gameState.teams = gameState.teams.filter(t => t.id !== message.teamId);
+            broadcast({ type: "UPDATE", state: gameState });
             break;
 
           case "START_TEAM":
             const teamToStart = gameState.teams.find(t => t.id === message.teamId);
             if (teamToStart && !teamToStart.startTime) {
               teamToStart.startTime = Date.now();
+              broadcast({ type: "UPDATE", state: gameState });
             }
             break;
-        }
 
-        // Broadcast the updated state to ALL connected devices
-        broadcast({ type: "UPDATE", state: gameState });
-      } catch (e) {
-        console.error("Error processing message:", e);
+          case "SUBMIT_CODE":
+            const team = gameState.teams.find((t) => t.id === message.teamId);
+            if (team) {
+              team.enteredCode = message.code;
+              const wasSolved = team.isSolved;
+              team.isSolved = team.enteredCode === team.code;
+              
+              if (team.isSolved && !wasSolved) {
+                team.solveTime = Date.now();
+              }
+
+              // Check if all teams solved
+              const allSolved = gameState.teams.length > 0 && gameState.teams.every((t) => t.isSolved);
+              if (allSolved) {
+                gameState.isVaultOpen = true;
+                broadcast({ type: "VAULT_OPENED" });
+              }
+              
+              broadcast({ type: "UPDATE", state: gameState });
+            }
+            break;
+
+          case "RESET_GAME":
+            gameState = {
+              ...gameState,
+              isStarted: false,
+              isVaultOpen: false,
+              teams: [],
+              startTime: null,
+            };
+            broadcast({ type: "UPDATE", state: gameState });
+            break;
+        }
+      } catch (err) {
+        console.error("Error processing message:", err);
       }
     });
 
@@ -135,15 +160,34 @@ async function startServer() {
     });
   });
 
+  // Vite middleware for development
   const isProd = process.env.NODE_ENV === "production";
-  if (!isProd) {
+  const hasDist = await import("fs").then(fs => fs.existsSync(path.resolve("dist")));
+
+  if (!isProd || !hasDist) {
+    console.log("Starting in development mode with Vite middleware...");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
     });
     app.use(vite.middlewares);
+    
+    // Explicitly serve index.html for the root in dev mode if needed
+    app.get("*", async (req, res, next) => {
+      if (req.originalUrl.includes('.')) return next(); // Skip files
+      try {
+        const fs = await import("fs");
+        let template = fs.readFileSync(path.resolve("index.html"), "utf-8");
+        template = await vite.transformIndexHtml(req.originalUrl, template);
+        res.status(200).set({ "Content-Type": "text/html" }).end(template);
+      } catch (e) {
+        next(e);
+      }
+    });
   } else {
+    console.log("Starting in production mode serving dist...");
     app.use(express.static(path.resolve("dist")));
+    // Catch-all route to serve index.html for SPA
     app.get("*", (req, res) => {
       res.sendFile(path.resolve("dist", "index.html"));
     });
