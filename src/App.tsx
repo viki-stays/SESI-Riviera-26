@@ -12,19 +12,21 @@ import {
   RefreshCcw,
   Trophy,
   AlertCircle,
-  Clock
+  Clock,
+  Wifi,
+  WifiOff
 } from 'lucide-react';
-import { GameState, ServerMessage, ClientMessage, TeamData } from './types';
+import { GameState, ServerMessage, ClientMessage, TeamData, Puzzle } from './types';
 
 export default function App() {
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [selectedTeamId, setSelectedTeamId] = useState<number | null>(null);
   const [teamCount, setTeamCount] = useState(4);
   const [inputCode, setInputCode] = useState('');
+  const [userRole, setUserRole] = useState<'host' | 'participant' | null>(null);
   const [isHost, setIsHost] = useState(false);
-  const [hasJoined, setHasJoined] = useState(false);
-  const [joinCode, setJoinCode] = useState('');
-  const [joinError, setJoinError] = useState(false);
+  const [isConnected, setIsConnected] = useState(false);
+  
   const [clientId] = useState(() => {
     const saved = localStorage.getItem('vault_client_id');
     if (saved) return saved;
@@ -32,84 +34,98 @@ export default function App() {
     localStorage.setItem('vault_client_id', id);
     return id;
   });
+
   const [claimedTeamId, setClaimedTeamId] = useState<number | null>(() => {
     const saved = localStorage.getItem('vault_claimed_team');
     return saved ? parseInt(saved) : null;
   });
+
   const socketRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('role') === 'host') setIsHost(true);
+    const connect = () => {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const socket = new WebSocket(`${protocol}//${window.location.host}`);
+      socketRef.current = socket;
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const socket = new WebSocket(`${protocol}//${window.location.host}`);
-    socketRef.current = socket;
+      socket.onopen = () => {
+        setIsConnected(true);
+      };
 
-    socket.onmessage = (event) => {
-      const message: ServerMessage = JSON.parse(event.data);
-      if (message.type === 'INIT' || message.type === 'UPDATE') {
-        setGameState(message.state);
-        
-        // If game is reset to lobby, clear local team state
-        if (!message.state.isStarted) {
-          setClaimedTeamId(null);
-          setSelectedTeamId(null);
-          localStorage.removeItem('vault_claimed_team');
+      socket.onmessage = (event) => {
+        const message: ServerMessage = JSON.parse(event.data);
+        if (message.type === 'INIT' || message.type === 'UPDATE') {
+          setGameState(message.state);
+          
+          // If game is reset to lobby, clear local team state
+          if (!message.state.isStarted) {
+            setClaimedTeamId(null);
+            setSelectedTeamId(null);
+            localStorage.removeItem('vault_claimed_team');
+          }
         }
-      }
+      };
+
+      socket.onclose = () => {
+        setIsConnected(false);
+        // Reconnect logic
+        setTimeout(connect, 2000);
+      };
     };
 
-    return () => socket.close();
+    connect();
+
+    return () => socketRef.current?.close();
   }, []);
 
+  const send = (message: ClientMessage) => {
+    if (socketRef.current?.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify(message));
+    }
+  };
+
   const startGame = () => {
-    socketRef.current?.send(JSON.stringify({ type: 'START_GAME', teamCount }));
+    send({ type: 'START_GAME', teamCount });
   };
 
   const resetGame = () => {
-    socketRef.current?.send(JSON.stringify({ type: 'RESET_GAME' }));
+    send({ type: 'RESET_GAME' });
     setSelectedTeamId(null);
     setClaimedTeamId(null);
     localStorage.removeItem('vault_claimed_team');
     setInputCode('');
   };
 
-  const joinRoom = () => {
-    if (joinCode.toUpperCase() === gameState?.roomCode) {
-      setHasJoined(true);
-      setJoinError(false);
-    } else {
-      setJoinError(true);
-      setTimeout(() => setJoinError(false), 1000);
-    }
-  };
-
   const claimTeam = (teamId: number) => {
-    socketRef.current?.send(JSON.stringify({ type: 'CLAIM_TEAM', teamId, clientId }));
+    send({ type: 'CLAIM_TEAM', teamId, clientId });
     setClaimedTeamId(teamId);
     setSelectedTeamId(teamId);
     localStorage.setItem('vault_claimed_team', teamId.toString());
   };
 
   const updateTeamName = (teamId: number, name: string) => {
-    socketRef.current?.send(JSON.stringify({ type: 'UPDATE_TEAM_NAME', teamId, name }));
+    send({ type: 'UPDATE_TEAM_NAME', teamId, name });
   };
 
-  const updatePuzzle = (teamId: number, puzzleId: string, field: string, value: string) => {
-    socketRef.current?.send(JSON.stringify({ type: 'UPDATE_PUZZLE', teamId, puzzleId, field, value }));
+  const updatePuzzle = (teamId: number, puzzleId: string, field: keyof Puzzle, value: string) => {
+    send({ type: 'UPDATE_PUZZLE', teamId, puzzleId, field, value });
   };
 
   const addTeam = () => {
-    socketRef.current?.send(JSON.stringify({ type: 'ADD_TEAM' }));
+    send({ type: 'ADD_TEAM' });
   };
 
   const removeTeam = (teamId: number) => {
-    socketRef.current?.send(JSON.stringify({ type: 'REMOVE_TEAM', teamId }));
+    send({ type: 'REMOVE_TEAM', teamId });
   };
 
   const startTeam = (teamId: number) => {
-    socketRef.current?.send(JSON.stringify({ type: 'START_TEAM', teamId }));
+    send({ type: 'START_TEAM', teamId });
+  };
+
+  const submitCode = (code: string) => {
+    if (!selectedTeamId) return;
+    send({ type: 'SUBMIT_CODE', teamId: selectedTeamId, code });
   };
 
   const downloadReport = () => {
@@ -138,11 +154,6 @@ export default function App() {
     document.body.removeChild(link);
   };
 
-  const submitCode = (code: string) => {
-    if (!selectedTeamId) return;
-    socketRef.current?.send(JSON.stringify({ type: 'SUBMIT_CODE', teamId: selectedTeamId, code }));
-  };
-
   const handleKeypadClick = (num: string) => {
     if (inputCode.length < 3) {
       const newCode = inputCode + num;
@@ -155,13 +166,12 @@ export default function App() {
 
   const clearInput = () => setInputCode('');
 
-  if (!gameState) return (
-    <div className="min-h-screen bg-[#0a0a0a] flex items-center justify-center">
-      <div className="animate-pulse text-gold-500 font-mono">INITIALIZING VAULT CONNECTION...</div>
-    </div>
-  );
+  const selectRole = (role: 'host' | 'participant') => {
+    setUserRole(role);
+    setIsHost(role === 'host');
+  };
 
-  if (!hasJoined && !isHost) return (
+  if (!userRole) return (
     <div className="min-h-screen bg-[#050505] flex items-center justify-center p-6">
       <div className="fixed inset-0 pointer-events-none overflow-hidden">
         <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-orange-900/10 blur-[120px] rounded-full" />
@@ -171,36 +181,63 @@ export default function App() {
       <motion.div 
         initial={{ opacity: 0, scale: 0.9 }}
         animate={{ opacity: 1, scale: 1 }}
-        className="max-w-md w-full bg-white/5 border border-white/10 p-8 rounded-3xl backdrop-blur-xl shadow-2xl text-center"
+        className="max-w-md w-full bg-white/5 border border-white/10 p-10 rounded-3xl backdrop-blur-xl shadow-2xl text-center"
       >
-        <div className="mb-8">
-          <div className="inline-block p-4 bg-orange-500/10 rounded-2xl border border-orange-500/20 mb-4">
-            <Lock className="w-12 h-12 text-orange-500" />
+        <div className="mb-10">
+          <div className="inline-block p-5 bg-orange-500/10 rounded-2xl border border-orange-500/20 mb-6">
+            <Lock className="w-16 h-16 text-orange-500" />
           </div>
-          <h1 className="text-3xl font-bold tracking-tighter uppercase italic mb-2">Access Portal</h1>
-          <p className="text-white/40 text-sm">Enter the secure room code to join the heist.</p>
+          <h1 className="text-4xl font-bold tracking-tighter uppercase italic mb-3">The Vault</h1>
+          <p className="text-white/40 text-sm">Select your authorization level to proceed.</p>
         </div>
 
-        <div className="space-y-4">
-          <input 
-            type="text" 
-            value={joinCode}
-            onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
-            placeholder="ROOM CODE"
-            className={`w-full bg-black/50 border ${joinError ? 'border-red-500 animate-shake' : 'border-white/10'} rounded-xl px-6 py-4 text-center text-2xl font-mono tracking-[0.5em] focus:outline-none focus:border-orange-500 transition-all`}
-          />
+        <div className="grid grid-cols-1 gap-4">
           <button 
-            onClick={joinRoom}
-            className="w-full py-4 bg-orange-500 text-black font-bold rounded-xl hover:bg-orange-400 active:scale-95 transition-all"
+            onClick={() => selectRole('host')}
+            className="group relative py-5 bg-white text-black font-bold rounded-2xl overflow-hidden transition-all hover:scale-[1.02] active:scale-95 shadow-xl"
           >
-            JOIN HEIST
+            <div className="absolute inset-0 bg-orange-500 translate-y-full group-hover:translate-y-0 transition-transform duration-300" />
+            <span className="relative z-10 flex items-center justify-center gap-3">
+              <Zap className="w-5 h-5" /> MISSION CONTROL (HOST)
+            </span>
           </button>
+          
+          <button 
+            onClick={() => selectRole('participant')}
+            className="group relative py-5 bg-white/5 border border-white/10 text-white font-bold rounded-2xl overflow-hidden transition-all hover:bg-white/10 hover:scale-[1.02] active:scale-95"
+          >
+            <span className="relative z-10 flex items-center justify-center gap-3">
+              <Users className="w-5 h-5" /> FIELD AGENT (PARTICIPANT)
+            </span>
+          </button>
+        </div>
+        
+        <div className="mt-8 pt-8 border-t border-white/5">
+          <p className="text-[10px] font-mono text-white/20 uppercase tracking-[0.2em]">Secure Multi-Device Protocol v2.5</p>
         </div>
       </motion.div>
     </div>
   );
 
-  const selectedTeam = gameState.teams.find(t => t.id === selectedTeamId);
+  if (!gameState) return (
+    <div className="min-h-screen bg-[#0a0a0a] flex flex-col items-center justify-center p-6 text-center">
+      <div className="animate-pulse text-orange-500 font-mono flex items-center gap-3 mb-8">
+        <Lock className="w-5 h-5 animate-bounce" />
+        ESTABLISHING SECURE CONNECTION...
+      </div>
+      <div className="max-w-md bg-white/5 border border-white/10 p-6 rounded-2xl backdrop-blur-xl">
+        <h3 className="text-white font-bold mb-2 flex items-center justify-center gap-2">
+          <AlertCircle className="w-4 h-4 text-orange-500" /> Connection Help
+        </h3>
+        <p className="text-white/40 text-xs leading-relaxed mb-4">
+          If you are seeing this on another device, make sure you are using the <span className="text-orange-500 font-bold">SHARED URL</span>, not the dev URL.
+        </p>
+        <div className="bg-black/50 p-3 rounded-lg border border-white/5 font-mono text-[10px] text-orange-500 break-all select-all">
+          https://ais-pre-tbpf7oiliiykcaaak7qev2-101096317257.asia-southeast1.run.app
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <div className="min-h-screen bg-[#050505] text-white font-sans selection:bg-orange-500/30">
@@ -220,47 +257,54 @@ export default function App() {
             </div>
             <div>
               <h1 className="text-3xl font-bold tracking-tighter uppercase italic">The Vault</h1>
-              <p className="text-xs font-mono text-white/40 uppercase tracking-widest">Secure Multi-Team Access System</p>
+              <p className="text-xs font-mono text-white/40 uppercase tracking-widest">Multi-Device Heist System</p>
             </div>
           </div>
 
-          <div className="flex items-center gap-6">
-            {isHost && (
+          <div className="flex flex-col items-end gap-2">
+            <div className="flex items-center gap-6">
               <div className="flex items-center gap-3 px-4 py-2 bg-white/5 border border-white/10 rounded-xl">
                 <div className="text-right">
-                  <div className="text-[10px] font-mono text-white/40 uppercase">Room Code</div>
-                  <div className="text-lg font-bold text-orange-500 tracking-widest">{gameState.roomCode}</div>
+                  <div className="text-[10px] font-mono text-white/40 uppercase">Network</div>
+                  <div className="text-lg font-bold text-orange-500 tracking-widest">ACTIVE</div>
                 </div>
                 <div className="w-px h-8 bg-white/10" />
                 <div className="text-right">
                   <div className="text-[10px] font-mono text-white/40 uppercase">Agents</div>
                   <div className="text-lg font-bold text-white">{gameState.connectedPlayers}</div>
                 </div>
+                <div className="w-px h-8 bg-white/10" />
+                <div className="flex items-center justify-center">
+                  {isConnected ? <Wifi className="w-4 h-4 text-emerald-500" /> : <WifiOff className="w-4 h-4 text-red-500" />}
+                </div>
               </div>
-            )}
 
-            {gameState.isStarted && !isHost && (
-              <div className="flex items-center gap-2 overflow-x-auto pb-2 max-w-full">
-                {gameState.teams.map(team => (
-                  <button
-                    key={team.id}
-                    onClick={() => {
-                      setSelectedTeamId(team.id);
-                      setInputCode(team.enteredCode);
-                    }}
-                    className={`px-4 py-2 rounded-lg font-mono text-sm transition-all border ${
-                      selectedTeamId === team.id 
-                        ? 'bg-orange-500 border-orange-400 text-black shadow-[0_0_15px_rgba(249,115,22,0.4)]' 
-                        : team.isSolved 
-                          ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400'
-                          : 'bg-white/5 border-white/10 text-white/60 hover:bg-white/10'
-                    }`}
-                  >
-                    TEAM {team.id}
-                  </button>
-                ))}
-              </div>
-            )}
+              {gameState.isStarted && !isHost && (
+                <div className="flex items-center gap-2 overflow-x-auto pb-2 max-w-full">
+                  {gameState.teams.map(team => (
+                    <button
+                      key={team.id}
+                      onClick={() => {
+                        setSelectedTeamId(team.id);
+                        setInputCode(team.enteredCode);
+                      }}
+                      className={`px-4 py-2 rounded-lg font-mono text-sm transition-all border ${
+                        selectedTeamId === team.id 
+                          ? 'bg-orange-500 border-orange-400 text-black shadow-[0_0_15px_rgba(249,115,22,0.4)]' 
+                          : team.isSolved 
+                            ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400'
+                            : 'bg-white/5 border-white/10 text-white/60 hover:bg-white/10'
+                      }`}
+                    >
+                      TEAM {team.id}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="text-[9px] font-mono text-white/20 uppercase tracking-tighter">
+              Use Shared URL for other devices: <span className="text-orange-500/50">ais-pre-...run.app</span>
+            </div>
           </div>
         </header>
 
@@ -275,7 +319,7 @@ export default function App() {
                 <h2 className="text-5xl font-bold mb-6 tracking-tight">HEIST LOBBY</h2>
                 <p className="text-white/60 leading-relaxed">
                   {isHost 
-                    ? "Game Master, prepare the mission. Share the room code with your agents and initiate the heist when all teams are ready."
+                    ? "Game Master, prepare the mission. Share the link with your agents and initiate the heist when all teams are ready."
                     : "Waiting for the Game Master to initiate the heist. Coordinate with your team and prepare for extraction."}
                 </p>
               </div>
@@ -299,20 +343,6 @@ export default function App() {
                               {n}
                             </button>
                           ))}
-                        </div>
-                      </div>
-
-                      <div className="w-full p-6 bg-black/30 rounded-2xl border border-white/5">
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-xs font-mono text-white/40">CONNECTED AGENTS</span>
-                          <span className="text-orange-500 font-bold">{gameState.connectedPlayers}</span>
-                        </div>
-                        <div className="w-full bg-white/5 h-2 rounded-full overflow-hidden">
-                          <motion.div 
-                            className="h-full bg-orange-500"
-                            initial={{ width: 0 }}
-                            animate={{ width: `${Math.min(100, (gameState.connectedPlayers / 10) * 100)}%` }}
-                          />
                         </div>
                       </div>
                     </div>
@@ -358,30 +388,6 @@ export default function App() {
                 <div className="absolute top-0 left-0 w-full h-full bg-gradient-to-br from-emerald-500/20 via-transparent to-orange-500/20" />
               </motion.div>
 
-              {/* Confetti-like particles */}
-              {Array.from({ length: 50 }).map((_, i) => (
-                <motion.div
-                  key={i}
-                  initial={{ 
-                    x: Math.random() * window.innerWidth, 
-                    y: -20,
-                    rotate: 0,
-                    opacity: 1
-                  }}
-                  animate={{ 
-                    y: window.innerHeight + 20,
-                    rotate: 360,
-                    opacity: 0
-                  }}
-                  transition={{ 
-                    duration: Math.random() * 3 + 2, 
-                    repeat: Infinity,
-                    delay: Math.random() * 5
-                  }}
-                  className={`absolute w-2 h-2 rounded-full ${i % 2 === 0 ? 'bg-emerald-500' : 'bg-orange-500'}`}
-                />
-              ))}
-
               <div className="relative z-10 text-center px-6">
                 <motion.div
                   initial={{ scale: 0, rotate: -180 }}
@@ -423,10 +429,6 @@ export default function App() {
                       {Math.floor((Date.now() - (gameState.startTime || 0)) / 60000)}:
                       {String(Math.floor(((Date.now() - (gameState.startTime || 0)) % 60000) / 1000)).padStart(2, '0')}
                     </div>
-                  </div>
-                  <div className="bg-white/5 border border-white/10 px-12 py-8 rounded-3xl backdrop-blur-xl">
-                    <div className="text-xs font-mono text-white/40 uppercase mb-2 tracking-widest">Security Level</div>
-                    <div className="text-5xl font-bold text-orange-500">CRACKED</div>
                   </div>
                 </motion.div>
 
@@ -576,12 +578,7 @@ export default function App() {
                     <div className="flex items-center justify-between mb-4">
                       <div className="flex items-center gap-4">
                         <h3 className="text-2xl font-bold flex items-center gap-3">
-                          <input 
-                            type="text"
-                            value={gameState.teams.find(t => t.id === claimedTeamId)?.name || ''}
-                            onChange={(e) => updateTeamName(claimedTeamId, e.target.value)}
-                            className="bg-transparent border-b border-white/10 focus:border-orange-500 focus:outline-none transition-colors"
-                          />
+                          {gameState.teams.find(t => t.id === claimedTeamId)?.name}
                         </h3>
                         <div className="px-3 py-1 bg-orange-500/10 border border-orange-500/20 rounded-lg text-orange-500 text-xs font-mono">
                           {(() => {
@@ -595,11 +592,6 @@ export default function App() {
                           })()}
                         </div>
                       </div>
-                      {gameState.teams.find(t => t.id === claimedTeamId)?.isSolved && (
-                        <span className="px-3 py-1 bg-emerald-500/20 text-emerald-400 text-xs font-mono rounded-full border border-emerald-500/40">
-                          LAYER BYPASSED
-                        </span>
-                      )}
                     </div>
 
                     {(() => {
@@ -764,9 +756,10 @@ export default function App() {
 
         {/* Footer Info */}
         <footer className="mt-20 pt-8 border-t border-white/10 flex flex-col md:flex-row justify-between items-center gap-4 text-white/40 text-xs font-mono uppercase tracking-widest">
-          <div className="flex items-center gap-4">
+          <div className="flex flex-col md:flex-row items-center gap-4">
             <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> System Uptime: 99.9%</span>
             <span className="flex items-center gap-1"><Zap className="w-3 h-3" /> Encryption: AES-256</span>
+            <span className="text-orange-500/40 border border-orange-500/20 px-2 py-0.5 rounded">⚠️ Vercel Warning: WebSockets not supported</span>
           </div>
           <div>© 2026 Vault Security Systems Inc.</div>
         </footer>

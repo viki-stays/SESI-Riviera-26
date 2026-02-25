@@ -173,7 +173,7 @@ async function startServer() {
     app.use(vite.middlewares);
     
     // Explicitly serve index.html for the root in dev mode if needed
-    app.get("*", async (req, res, next) => {
+    app.get("(.*)", async (req, res, next) => {
       if (req.originalUrl.includes('.')) return next(); // Skip files
       try {
         const fs = await import("fs");
@@ -188,7 +188,7 @@ async function startServer() {
     console.log("Starting in production mode serving dist...");
     app.use(express.static(path.resolve("dist")));
     // Catch-all route to serve index.html for SPA
-    app.get("*", (req, res) => {
+    app.get("(.*)", (req, res) => {
       res.sendFile(path.resolve("dist", "index.html"));
     });
   }
