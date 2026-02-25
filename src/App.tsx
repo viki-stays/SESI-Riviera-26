@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Lock, 
@@ -12,28 +12,19 @@ import {
   RefreshCcw,
   Trophy,
   AlertCircle,
-  Clock
+  Clock,
+  Wifi,
+  WifiOff
 } from 'lucide-react';
-import { GameState, TeamData, Puzzle } from './types';
-import { INITIAL_TEAMS } from './constants';
+import { GameState, ServerMessage, ClientMessage, TeamData, Puzzle } from './types';
 
 export default function App() {
-  const [gameState, setGameState] = useState<GameState>(() => {
-    const saved = localStorage.getItem('vault_game_state');
-    if (saved) return JSON.parse(saved);
-    return {
-      isStarted: false,
-      isVaultOpen: false,
-      teams: [],
-      startTime: null,
-      connectedPlayers: 1,
-    };
-  });
-
+  const [gameState, setGameState] = useState<GameState | null>(null);
   const [selectedTeamId, setSelectedTeamId] = useState<number | null>(null);
   const [teamCount, setTeamCount] = useState(4);
   const [inputCode, setInputCode] = useState('');
   const [isHost, setIsHost] = useState(false);
+  const [isConnected, setIsConnected] = useState(false);
   
   const [clientId] = useState(() => {
     const saved = localStorage.getItem('vault_client_id');
@@ -48,59 +39,60 @@ export default function App() {
     return saved ? parseInt(saved) : null;
   });
 
-  // Sync state to localStorage
-  useEffect(() => {
-    localStorage.setItem('vault_game_state', JSON.stringify(gameState));
-  }, [gameState]);
+  const socketRef = useRef<WebSocket | null>(null);
 
-  // Sync state across tabs
   useEffect(() => {
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === 'vault_game_state' && e.newValue) {
-        const newState = JSON.parse(e.newValue);
-        setGameState(newState);
-        
-        // If game is reset to lobby, clear local team state
-        if (!newState.isStarted) {
-          setClaimedTeamId(null);
-          setSelectedTeamId(null);
-          localStorage.removeItem('vault_claimed_team');
-        }
-      }
-    };
-    window.addEventListener('storage', handleStorageChange);
-    
     const params = new URLSearchParams(window.location.search);
     if (params.get('role') === 'host') setIsHost(true);
-    
-    return () => window.removeEventListener('storage', handleStorageChange);
+
+    const connect = () => {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      // In production/deployment, this will point to the same host
+      const socket = new WebSocket(`${protocol}//${window.location.host}`);
+      socketRef.current = socket;
+
+      socket.onopen = () => {
+        setIsConnected(true);
+      };
+
+      socket.onmessage = (event) => {
+        const message: ServerMessage = JSON.parse(event.data);
+        if (message.type === 'INIT' || message.type === 'UPDATE') {
+          setGameState(message.state);
+          
+          // If game is reset to lobby, clear local team state
+          if (!message.state.isStarted) {
+            setClaimedTeamId(null);
+            setSelectedTeamId(null);
+            localStorage.removeItem('vault_claimed_team');
+          }
+        }
+      };
+
+      socket.onclose = () => {
+        setIsConnected(false);
+        // Reconnect logic
+        setTimeout(connect, 2000);
+      };
+    };
+
+    connect();
+
+    return () => socketRef.current?.close();
   }, []);
 
-  const updateGameState = (updater: (prev: GameState) => GameState) => {
-    setGameState(prev => {
-      const next = updater(prev);
-      return next;
-    });
+  const send = (message: ClientMessage) => {
+    if (socketRef.current?.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify(message));
+    }
   };
 
   const startGame = () => {
-    updateGameState(prev => ({
-      ...prev,
-      isStarted: true,
-      isVaultOpen: false,
-      teams: INITIAL_TEAMS(teamCount),
-      startTime: Date.now(),
-    }));
+    send({ type: 'START_GAME', teamCount });
   };
 
   const resetGame = () => {
-    updateGameState(prev => ({
-      ...prev,
-      isStarted: false,
-      isVaultOpen: false,
-      teams: [],
-      startTime: null,
-    }));
+    send({ type: 'RESET_GAME' });
     setSelectedTeamId(null);
     setClaimedTeamId(null);
     localStorage.removeItem('vault_claimed_team');
@@ -108,95 +100,39 @@ export default function App() {
   };
 
   const claimTeam = (teamId: number) => {
-    updateGameState(prev => ({
-      ...prev,
-      teams: prev.teams.map(t => 
-        t.id === teamId ? { ...t, isClaimed: true, claimedBy: clientId } : t
-      )
-    }));
+    send({ type: 'CLAIM_TEAM', teamId, clientId });
     setClaimedTeamId(teamId);
     setSelectedTeamId(teamId);
     localStorage.setItem('vault_claimed_team', teamId.toString());
   };
 
   const updateTeamName = (teamId: number, name: string) => {
-    updateGameState(prev => ({
-      ...prev,
-      teams: prev.teams.map(t => t.id === teamId ? { ...t, name } : t)
-    }));
+    send({ type: 'UPDATE_TEAM_NAME', teamId, name });
   };
 
   const updatePuzzle = (teamId: number, puzzleId: string, field: keyof Puzzle, value: string) => {
-    updateGameState(prev => ({
-      ...prev,
-      teams: prev.teams.map(t => {
-        if (t.id !== teamId) return t;
-        const newPuzzles = t.puzzles.map(p => 
-          p.id === puzzleId ? { ...p, [field]: value } : p
-        );
-        return {
-          ...t,
-          puzzles: newPuzzles,
-          code: field === 'answer' ? newPuzzles.map(p => p.answer).join('') : t.code
-        };
-      })
-    }));
+    send({ type: 'UPDATE_PUZZLE', teamId, puzzleId, field, value });
   };
 
   const addTeam = () => {
-    updateGameState(prev => {
-      if (prev.teams.length >= 16) return prev;
-      const newId = prev.teams.length > 0 ? Math.max(...prev.teams.map(t => t.id)) + 1 : 1;
-      const newTeam = INITIAL_TEAMS(1)[0];
-      newTeam.id = newId;
-      newTeam.name = `Team ${newId}`;
-      return {
-        ...prev,
-        teams: [...prev.teams, newTeam]
-      };
-    });
+    send({ type: 'ADD_TEAM' });
   };
 
   const removeTeam = (teamId: number) => {
-    updateGameState(prev => ({
-      ...prev,
-      teams: prev.teams.filter(t => t.id !== teamId)
-    }));
+    send({ type: 'REMOVE_TEAM', teamId });
   };
 
   const startTeam = (teamId: number) => {
-    updateGameState(prev => ({
-      ...prev,
-      teams: prev.teams.map(t => 
-        t.id === teamId && !t.startTime ? { ...t, startTime: Date.now() } : t
-      )
-    }));
+    send({ type: 'START_TEAM', teamId });
   };
 
   const submitCode = (code: string) => {
     if (!selectedTeamId) return;
-    updateGameState(prev => {
-      const newTeams = prev.teams.map(t => {
-        if (t.id !== selectedTeamId) return t;
-        const isSolved = code === t.code;
-        return {
-          ...t,
-          enteredCode: code,
-          isSolved,
-          solveTime: isSolved && !t.isSolved ? Date.now() : t.solveTime
-        };
-      });
-      
-      const allSolved = newTeams.length > 0 && newTeams.every(t => t.isSolved);
-      return {
-        ...prev,
-        teams: newTeams,
-        isVaultOpen: allSolved
-      };
-    });
+    send({ type: 'SUBMIT_CODE', teamId: selectedTeamId, code });
   };
 
   const downloadReport = () => {
+    if (!gameState) return;
     const headers = ['Team ID', 'Team Name', 'Start Time', 'Solve Time', 'Duration (s)'];
     const rows = gameState.teams.map(t => {
       const duration = t.solveTime && t.startTime ? (t.solveTime - t.startTime) / 1000 : 'N/A';
@@ -237,7 +173,7 @@ export default function App() {
     <div className="min-h-screen bg-[#0a0a0a] flex items-center justify-center">
       <div className="animate-pulse text-orange-500 font-mono flex items-center gap-3">
         <Lock className="w-5 h-5 animate-bounce" />
-        INITIALIZING VAULT...
+        ESTABLISHING SECURE CONNECTION...
       </div>
     </div>
   );
@@ -267,13 +203,17 @@ export default function App() {
           <div className="flex items-center gap-6">
             <div className="flex items-center gap-3 px-4 py-2 bg-white/5 border border-white/10 rounded-xl">
               <div className="text-right">
-                <div className="text-[10px] font-mono text-white/40 uppercase">Mode</div>
-                <div className="text-lg font-bold text-orange-500 tracking-widest">OFFLINE</div>
+                <div className="text-[10px] font-mono text-white/40 uppercase">Network</div>
+                <div className="text-lg font-bold text-orange-500 tracking-widest">ACTIVE</div>
               </div>
               <div className="w-px h-8 bg-white/10" />
               <div className="text-right">
-                <div className="text-[10px] font-mono text-white/40 uppercase">Status</div>
-                <div className="text-lg font-bold text-white">LOCAL</div>
+                <div className="text-[10px] font-mono text-white/40 uppercase">Agents</div>
+                <div className="text-lg font-bold text-white">{gameState.connectedPlayers}</div>
+              </div>
+              <div className="w-px h-8 bg-white/10" />
+              <div className="flex items-center justify-center">
+                {isConnected ? <Wifi className="w-4 h-4 text-emerald-500" /> : <WifiOff className="w-4 h-4 text-red-500" />}
               </div>
             </div>
 
@@ -313,7 +253,7 @@ export default function App() {
                 <h2 className="text-5xl font-bold mb-6 tracking-tight">HEIST LOBBY</h2>
                 <p className="text-white/60 leading-relaxed">
                   {isHost 
-                    ? "Game Master, prepare the mission. Share the room code with your agents and initiate the heist when all teams are ready."
+                    ? "Game Master, prepare the mission. Share the link with your agents and initiate the heist when all teams are ready."
                     : "Waiting for the Game Master to initiate the heist. Coordinate with your team and prepare for extraction."}
                 </p>
               </div>
